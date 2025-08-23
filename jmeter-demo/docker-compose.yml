@@ -1,0 +1,187 @@
+version: '3.8'
+services:
+  app:
+    image: jmeter-demo-app
+    container_name: app
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+    depends_on:
+      - postgres
+    environment:
+      SPRING_PROFILES_ACTIVE: stage
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres:5433/jmeterdb"
+      SPRING_DATASOURCE_USERNAME: username
+      SPRING_DATASOURCE_PASSWORD: password
+    restart: unless-stopped
+    networks:
+      - jmeter-demo
+
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - postgres_exporter
+      - kafka-exporter
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    restart: unless-stopped
+    networks:
+      - jmeter-demo
+
+  postgres:
+    image: postgres:14.7-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_USER: "username"
+      POSTGRES_PASSWORD: "password"
+      POSTGRES_DB: "jmeterdb"
+    ports:
+      - "5433:5433"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U username -d jmeterdb" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    volumes:
+      - ./infrastructure/db/create_db.sql:/docker-entrypoint-initdb.d/create_db.sql
+      - db-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - jmeter-demo
+    command: ["-c", "port=5433"]
+
+  postgres_exporter:
+    image: prometheuscommunity/postgres-exporter:v0.10.1
+    container_name: postgres_exporter
+    depends_on:
+      - postgres
+    environment:
+      DATA_SOURCE_NAME: "postgres://username:password@postgres:5433/jmeterdb?sslmode=disable"
+    volumes:
+      - ./queries.yaml:/etc/postgres_exporter/queries.yaml:ro
+    ports:
+      - "9187:9187"
+    restart: unless-stopped
+    networks:
+      - jmeter-demo
+
+#  pgadmin:
+#  container_name: pgadmin4_container
+#  image: dpage/pgadmin4:7
+#  restart: always
+#  environment:
+#    PGADMIN_DEFAULT_EMAIL: admin@admin.com
+#    PGADMIN_DEFAULT_PASSWORD: root
+#  ports:
+#    - "5050:80"
+#  volumes:
+#    - pgadmin-data:/var/lib/pgadmin
+#
+
+  zookeeper:
+    image: wurstmeister/zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    restart: unless-stopped
+    networks:
+      - jmeter-demo
+
+  kafka:
+    image: wurstmeister/kafka
+    container_name: kafka
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+#      KAFKA_ADVERTISED_LISTENERS: INSIDE://localhost:9092,OUTSIDE://localhost:9093
+      KAFKA_ADVERTISED_LISTENERS: INSIDE://kafka:9092,OUTSIDE://localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INSIDE:PLAINTEXT,OUTSIDE:PLAINTEXT
+      KAFKA_LISTENERS: INSIDE://0.0.0.0:9092,OUTSIDE://0.0.0.0:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: INSIDE
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+#      KAFKA_JMX_PORT: 9999
+      KAFKA_CREATE_TOPICS: "jmeter-topic:1:1"
+    restart: unless-stopped
+    networks:
+      - jmeter-demo
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter
+    container_name: kafka-exporter
+    depends_on:
+      - kafka
+    command: [ "--kafka.server=kafka:9092"]
+    ports:
+      - 9308:9308
+    restart: unless-stopped
+    networks:
+      - jmeter-demo
+
+  jmx-exporter:
+#    image: bitnami/jmx-exporter:latest
+    image: sscaling/jmx-prometheus-exporter
+    container_name: jmx-exporter
+#    ports:
+#      - "9001:9001"  # Порт, по которому будет работать jmx-exporter
+    ports:
+      - "5556:5556"
+    environment:
+      SERVICE_PORT: 5556
+    volumes:
+      - ./config.yaml:/opt/jmx-exporter/config.yaml  # Подключаем файл конфигурации
+    depends_on:
+      - kafka
+    restart: unless-stopped
+    networks:
+      - jmeter-demo
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    networks:
+      - jmeter-demo
+    ports:
+      - "3000:3000"
+    user: "1000"
+    volumes:
+      - grafana-storage:/var/lib/grafana
+    environment:
+      GF_INSTALL_PLUGINS: "grafana-clock-panel,grafana-simple-json-datasource,grafana-worldmap-panel,grafana-piechart-panel"
+  influxdb:
+    image: influxdb:latest
+    container_name: influxdb
+    networks:
+      - jmeter-demo
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    volumes:
+#      - $DOCKERDIR/appdata/influxdb2/config:/etc/influxdb2
+#      - $DOCKERDIR/appdata/influxdb2/db:/var/lib/influxdb2
+      - influxdb-storage-config:/etc/influxdb2
+      - influxdb-storage-db:/var/lib/influxdb2
+
+volumes:
+  db-data:
+  grafana-storage:
+  influxdb-storage-config:
+  influxdb-storage-db:
+#  pgadmin-data:
+
+networks:
+  jmeter-demo:
+    driver: bridge
