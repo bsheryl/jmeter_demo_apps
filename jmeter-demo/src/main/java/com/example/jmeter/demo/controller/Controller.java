@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 @RestController
 @RequiredArgsConstructor
@@ -102,6 +103,13 @@ public class Controller {
         }
         user.setEmail(emailTmp);
         return user;
+    }
+
+    @GetMapping("/all")
+    @Timed(value = "find_all_method", description = "Time taken to execute GET method find all users")
+    public ResponseEntity<List<User>> findAll() {
+        var userList = userRepository.findAll();
+        return ResponseEntity.ok(userList);
     }
 
     @KafkaListener(topics = "jmeter-topic", groupId = "myGroupId")
